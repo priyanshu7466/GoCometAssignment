@@ -1,0 +1,47 @@
+{
+  "customer_name": "TechWorld Distribution GmbH",
+  "customer_id": "CUST-TECHWORLD-001",
+  "description": "Validation rules for TechWorld Distribution GmbH — electronics importer based in Frankfurt, Germany.",
+  "rules": {
+    "consignee_name": {
+      "expected": "TechWorld Distribution GmbH",
+      "match_type": "exact",
+      "description": "Must match registered company name exactly"
+    },
+    "hs_code": {
+      "expected": "8528.72",
+      "match_type": "exact",
+      "description": "HS code for LED display panels / monitors"
+    },
+    "port_of_loading": {
+      "expected": "Yantian, Shenzhen",
+      "match_type": "fuzzy",
+      "description": "Preferred port of loading — Yantian"
+    },
+    "port_of_discharge": {
+      "expected": "Hamburg, Germany",
+      "match_type": "fuzzy",
+      "description": "Primary discharge port for European shipments"
+    },
+    "incoterms": {
+      "expected": "CIF Hamburg",
+      "match_type": "contains",
+      "description": "CIF terms — must include destination port"
+    },
+    "gross_weight": {
+      "expected": null,
+      "match_type": "present",
+      "description": "Gross weight must be present and > 0"
+    },
+    "invoice_number": {
+      "expected": null,
+      "match_type": "present",
+      "description": "Invoice number must be present"
+    },
+    "description_of_goods": {
+      "expected": null,
+      "match_type": "present",
+      "description": "Description of goods must be present and non-empty"
+    }
+  }
+}

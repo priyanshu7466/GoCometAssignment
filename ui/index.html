@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nova — Trade Document Pipeline</title>
+    <meta name="description" content="AI-powered trade document extraction, validation, and routing pipeline by GoComet Nova">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header id="app-header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">◆</span>
+                <span class="logo-text">Nova</span>
+            </div>
+            <span class="header-divider">·</span>
+            <span class="header-subtitle">Trade Document Pipeline</span>
+        </div>
+        <div class="header-right">
+            <button id="btn-history" class="header-btn" onclick="togglePanel('history')">
+                <span class="btn-icon">📋</span> History
+            </button>
+            <button id="btn-query" class="header-btn" onclick="togglePanel('query')">
+                <span class="btn-icon">🔍</span> Query
+            </button>
+        </div>
+    </header>
+
+    <main id="app-main">
+        <!-- Upload Panel (Default State) -->
+        <section id="panel-upload" class="panel active">
+            <div class="upload-area" id="drop-zone">
+                <div class="upload-icon">📄</div>
+                <h2>Upload Trade Document</h2>
+                <p>Drop a PDF or image here, or click to browse</p>
+                <p class="upload-hint">Bill of Lading · Commercial Invoice · Packing List · Certificate of Origin</p>
+                <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg" hidden>
+                <button class="btn-primary" onclick="document.getElementById('file-input').click()">Choose File</button>
+            </div>
+        </section>
+
+        <!-- Processing Panel -->
+        <section id="panel-processing" class="panel">
+            <div class="processing-container">
+                <div class="pipeline-steps">
+                    <div class="step" id="step-extract">
+                        <div class="step-indicator"><span class="step-number">1</span></div>
+                        <div class="step-info">
+                            <h3>Extracting Fields</h3>
+                            <p>Vision model reading document...</p>
+                        </div>
+                        <div class="step-status"><span class="spinner"></span></div>
+                    </div>
+                    <div class="step-connector"></div>
+                    <div class="step" id="step-validate">
+                        <div class="step-indicator"><span class="step-number">2</span></div>
+                        <div class="step-info">
+                            <h3>Validating Fields</h3>
+                            <p>Checking against customer rules...</p>
+                        </div>
+                        <div class="step-status waiting">Waiting</div>
+                    </div>
+                    <div class="step-connector"></div>
+                    <div class="step" id="step-route">
+                        <div class="step-indicator"><span class="step-number">3</span></div>
+                        <div class="step-info">
+                            <h3>Routing Decision</h3>
+                            <p>Deciding next action...</p>
+                        </div>
+                        <div class="step-status waiting">Waiting</div>
+                    </div>
+                    <div class="step-connector"></div>
+                    <div class="step" id="step-store">
+                        <div class="step-indicator"><span class="step-number">4</span></div>
+                        <div class="step-info">
+                            <h3>Storing Result</h3>
+                            <p>Saving verified output...</p>
+                        </div>
+                        <div class="step-status waiting">Waiting</div>
+                    </div>
+                </div>
+                <div class="processing-file">
+                    <span class="file-icon">📎</span>
+                    <span id="processing-filename">document.pdf</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Panel -->
+        <section id="panel-results" class="panel">
+            <div class="results-container">
+                <!-- Decision Banner -->
+                <div class="decision-banner" id="decision-banner">
+                    <div class="decision-icon" id="decision-icon">✓</div>
+                    <div class="decision-text">
+                        <h2 id="decision-title">Document Approved</h2>
+                        <p id="decision-reasoning">All fields match.</p>
+                    </div>
+                    <div class="decision-badge" id="decision-badge">APPROVED</div>
+                </div>
+
+                <!-- Summary Stats -->
+                <div class="stats-row">
+                    <div class="stat-card stat-match">
+                        <div class="stat-value" id="stat-matches">0</div>
+                        <div class="stat-label">Matched</div>
+                    </div>
+                    <div class="stat-card stat-mismatch">
+                        <div class="stat-value" id="stat-mismatches">0</div>
+                        <div class="stat-label">Mismatched</div>
+                    </div>
+                    <div class="stat-card stat-uncertain">
+                        <div class="stat-value" id="stat-uncertain">0</div>
+                        <div class="stat-label">Uncertain</div>
+                    </div>
+                    <div class="stat-card stat-total">
+                        <div class="stat-value" id="stat-total">0</div>
+                        <div class="stat-label">Total Fields</div>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('fields')" id="tab-fields">Field-by-Field</button>
+                    <button class="tab" onclick="switchTab('extraction')" id="tab-extraction">Extracted Data</button>
+                    <button class="tab" onclick="switchTab('draft')" id="tab-draft">Draft Email</button>
+                </div>
+
+                <!-- Fields Tab -->
+                <div class="tab-content active" id="content-fields">
+                    <div class="fields-table" id="fields-table">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Extraction Tab -->
+                <div class="tab-content" id="content-extraction">
+                    <div class="extraction-grid" id="extraction-grid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Draft Email Tab -->
+                <div class="tab-content" id="content-draft">
+                    <div class="draft-container">
+                        <div class="draft-label">Draft Amendment Email (editable before sending)</div>
+                        <textarea id="draft-email" class="draft-textarea" rows="12" placeholder="No draft email generated — document was approved."></textarea>
+                        <div class="draft-actions">
+                            <button class="btn-secondary" onclick="copyDraft()">📋 Copy to Clipboard</button>
+                            <p class="draft-note">⚠️ Agent never sends automatically. CG always reviews and sends.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="results-actions">
+                    <button class="btn-primary" onclick="resetPipeline()">↩ Process Another Document</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- History Panel -->
+        <section id="panel-history" class="panel">
+            <div class="panel-header">
+                <h2>Processing History</h2>
+                <button class="btn-close" onclick="togglePanel('upload')">✕</button>
+            </div>
+            <div class="history-list" id="history-list">
+                <p class="empty-state">No documents processed yet.</p>
+            </div>
+        </section>
+
+        <!-- Query Panel -->
+        <section id="panel-query" class="panel">
+            <div class="panel-header">
+                <h2>Query Stored Data</h2>
+                <button class="btn-close" onclick="togglePanel('upload')">✕</button>
+            </div>
+            <div class="query-container">
+                <div class="query-input-row">
+                    <input type="text" id="query-input" class="query-input" 
+                           placeholder="e.g., How many shipments were flagged this week?" 
+                           onkeydown="if(event.key==='Enter')runQuery()">
+                    <button class="btn-primary" onclick="runQuery()">Ask</button>
+                </div>
+                <div class="query-suggestions">
+                    <span class="suggestion" onclick="setQuery('How many shipments have been processed?')">How many shipments?</span>
+                    <span class="suggestion" onclick="setQuery('Show all shipments that need review')">Needs review</span>
+                    <span class="suggestion" onclick="setQuery('Which documents had mismatches?')">With mismatches</span>
+                    <span class="suggestion" onclick="setQuery('Show the latest approved shipment')">Latest approved</span>
+                </div>
+                <div id="query-result" class="query-result" style="display:none;">
+                    <div class="query-answer" id="query-answer"></div>
+                    <details class="query-details">
+                        <summary>SQL Query</summary>
+                        <pre id="query-sql"></pre>
+                    </details>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>

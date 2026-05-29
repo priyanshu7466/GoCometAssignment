@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+ENV/
+
+# Database
+*.db
+*.sqlite3
+
+# Uploads and temporary files
+data/uploads/*
+!data/uploads/.gitkeep
+
+# IDEs
+.idea/
+.vscode/
+*.swp
