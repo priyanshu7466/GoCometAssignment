@@ -1,6 +1,6 @@
 # PRD: Trade Document Validation — Multi-Agent Pipeline (Part 1)
 
-**Author:** Priyanshu · **Date:** 2025-05-29 · **Status:** Draft · **Scope:** Part 1 of GoComet Nova FDE Assignment
+**Author:** Priyanshu · **Date:** 2025-05-29 · **Scope:** Part 1 of GoComet Nova FDE Assignment
 
 ---
 
