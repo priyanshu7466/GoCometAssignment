@@ -81,7 +81,7 @@ Every time an agent finishes its job, the state is saved to a SQLite database. T
 
 ## 5 | Tech Stack & LLM Choices
 
-| Role | Tool Choice | Why we chose it |
+| Role | Tool Choice | Why I chose it |
 |---|---|---|
 | **Extractor** | Groq `llama-4-scout` (Vision) | Strong vision capabilities and lightning-fast inference. Trade docs are structured enough that Llama 4 Scout handles them perfectly, and the Groq free tier is great for development. |
 | **Validator** | Deterministic Python | LLMs are notoriously bad at exact string matching. Since rule comparison needs to be 100% exact (like checking if an HS code matches perfectly), we use pure Python code. It costs nothing, has zero latency, and is perfectly reliable. |
