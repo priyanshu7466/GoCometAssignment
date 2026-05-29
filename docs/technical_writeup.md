@@ -1,153 +1,100 @@
-# Technical Write-up — Nova Trade Document Pipeline
+# Technical Write-Up: Nova Trade Document Pipeline
 
-## 1. Architecture
+## 1. Architecture & Data Flow
 
-```
-         ┌─────────────────────────────────────────────────────┐
-         │                  Client (Browser)                    │
-         │          Upload PDF → View Results → Query           │
-         └──────────────────────┬───────────────────────────────┘
-                                │ HTTP
-                                ▼
-         ┌─────────────────────────────────────────────────────┐
-         │              FastAPI Server (:8000)                  │
-         │                                                     │
-         │  POST /api/process ─────────────────────────────┐   │
-         │                                                 │   │
-         │  ┌──────────────┐                               │   │
-         │  │   1. SAVE    │  Write file to data/uploads/  │   │
-         │  └──────┬───────┘                               │   │
-         │         ▼                                       │   │
-         │  ┌──────────────┐  Gemini 2.0 Flash (Vision)    │   │
-         │  │ 2. EXTRACTOR │  PDF → JSON + confidence      │   │
-         │  └──────┬───────┘                               │   │
-         │         ▼  structured JSON                      │   │
-         │  ┌──────────────┐  Deterministic rules engine    │   │
-         │  │ 3. VALIDATOR │  JSON + rules → verdicts      │   │
-         │  └──────┬───────┘                               │   │
-         │         ▼  validation result                    │   │
-         │  ┌──────────────┐  Gemini 2.0 Flash (Text)      │   │
-         │  │  4. ROUTER   │  Decide + reason + draft      │   │
-         │  └──────┬───────┘                               │   │
-         │         ▼  routing decision                     │   │
-         │  ┌──────────────┐                               │   │
-         │  │  5. STORE    │  SQLite → data/shipments.db   │   │
-         │  └──────────────┘                               │   │
-         │                                                     │
-         │  POST /api/query ───────────────────────────────┐   │
-         │  │ NL question → Gemini → SQL → Execute → Answer│   │
-         │  └──────────────────────────────────────────────┘   │
-         └─────────────────────────────────────────────────────┘
+Below is the architecture for the multi-agent pipeline. The system enforces a strict separation of concerns: extraction is purely visual, validation is deterministic, and routing is decision-based.
 
-Data flow: Each agent's output is the next agent's input.
-State: Each stage persists to SQLite before proceeding.
-Communication: Structured JSON handoff — no shared mutable state.
+```mermaid
+graph TD
+    %% Entities
+    Client[Email / User Upload] --> API[FastAPI Server]
+    API --> Extractor[Agent 1: Extractor]
+    Extractor -.->|Base64 Image| VisionLLM[Groq Llama 4 Scout Vision]
+    VisionLLM -.->|Raw JSON Extraction| Extractor
+    
+    Extractor --> DB[(SQLite DB: Shipments)]
+    Extractor --> Validator[Agent 2: Validator]
+    
+    Validator -.->|Lookup| Rules[(customer_rules.json)]
+    Validator --> DB
+    Validator --> Router[Agent 3: Router]
+    
+    Router -.->|Validation Results| TextLLM[Groq Llama 3.3 70B]
+    TextLLM -.->|Decision & Draft Email| Router
+    
+    Router --> DB
+    Router --> UI[Frontend Dashboard]
+    
+    %% Styling
+    classDef llm fill:#f9f,stroke:#333,stroke-width:2px;
+    class VisionLLM,TextLLM llm;
+    classDef agent fill:#bbf,stroke:#333,stroke-width:2px;
+    class Extractor,Validator,Router agent;
+    classDef db fill:#bfb,stroke:#333,stroke-width:2px;
+    class DB,Rules db;
 ```
 
-## 2. Three Nastiest Failure Modes (from real testing)
+**State Management:** State does not live in memory between agent hops. Each agent independently persists its output to the SQLite database. If Agent 3 crashes due to a rate limit, the system can resume from the stored state of Agent 2 without reprocessing the image.
 
-### Failure 1: LLM returns non-JSON response
+---
 
-**What happened:** On a particularly complex multi-page PDF, Gemini sometimes wrapped its response in markdown code fences (` ```json ... ``` `) or added explanatory text before the JSON.
+## 2. The 3 Nastiest Failure Modes
 
-**How I handled it:** 
-- Strip markdown code fences from the response before parsing
-- If JSON parsing still fails, the extractor returns a structured error with `_error` and `_raw_response` fields
-- The API returns a 422 with a clear error message instead of crashing silently
+During testing, three critical failure modes emerged. Here is how they are handled:
 
-**What I'd do with more time:** Add a retry with a more explicit "return ONLY valid JSON" prompt, and implement JSON repair parsing (e.g., find the first `{` and last `}` and try to parse that substring).
+**1. Vision Model Hallucination on Missing Fields (The "Ghost Data" Problem)**
+* **The Failure:** Early in testing, if an Incoterm was missing from the PDF, the model would hallucinate "FOB" because it's statistically common in trade docs.
+* **The Fix:** We implemented a two-part safeguard. First, prompt engineering: *"If a field is not visibly present, return null with confidence 0.0."* Second, the Validator automatically catches any `null` or confidence `< 0.7` and flags it as `UNCERTAIN`. Uncertain fields are mathematically prevented from being Auto-Approved, forcing human review.
 
-### Failure 2: Confidence score gaming
+**2. Upstream LLM Provider Rate Limits (HTTP 429)**
+* **The Failure:** While presenting the demo, the Groq Llama 3.3 70B text model threw a 429 Resource Exhausted error because the free tier was temporarily overwhelmed globally.
+* **The Fix:** The Router agent catches HTTP 429s and exceptions globally. Instead of crashing the server, it gracefully degrades: it defaults the decision to `flag_for_review`, sets the reasoning to the API error, and surfaces it to the UI. The human operator is alerted rather than blocked.
 
-**What happened:** The LLM sometimes assigns 0.95 confidence to a field it clearly inferred rather than read from the document. Example: a Bill of Lading had no invoice number field, but the model returned `{"value": "N/A", "confidence": 0.85}` instead of `{"value": null, "confidence": 0.0}`.
+**3. Malformed JSON Extraction Responses**
+* **The Failure:** The vision model would occasionally append markdown backticks (` ```json ... ``` `) or trailing commas, causing the `json.loads()` step to hard-crash.
+* **The Fix:** We implemented strict string stripping logic before parsing, removing markdown blocks. If parsing still fails (e.g., structural corruption), the Extractor returns a specific `_error` payload, which triggers a `flag_for_review` downstream with the raw response attached for debugging.
 
-**How I handled it:**
-- Prompt engineering: explicit instruction "If a field is NOT found, return null with confidence 0.0. Never infer."
-- The Validator treats any null value as a mismatch for required fields, regardless of confidence
-- For production: I'd add a second-pass verification where another LLM call checks "is this field actually visible in the document?"
+---
 
-### Failure 3: Fuzzy matching false positives
+## 3. Observability in Production
 
-**What happened:** The validator's fuzzy matching (SequenceMatcher) matched "Nordic Imports A/S" with "Nordic Imports ApS" at ~92% similarity — treating it as a match when it's actually a different legal entity type (A/S = Aktieselskab, ApS = Anpartsselskab in Danish law).
+If this were running in production for 50 customers, we could not rely on print statements. We would implement distributed tracing (e.g., using **Langfuse** or **Datadog**).
 
-**How I handled it:**
-- For entity names, the rule is set to "exact" match instead of "fuzzy"
-- Added a similarity threshold sweet spot: >85% similarity → "uncertain" (not match), requiring human review
-- For production: I'd add entity-type-aware matching that treats legal suffixes (Ltd, LLC, GmbH, A/S, ApS) as semantically significant
+**Tracing a single shipment:**
+When an email arrives, a unique `TraceID` (UUID) is generated. This ID is passed in the headers to every agent and every database write. 
+- **The Dashboard:** A production observability dashboard would show a Gantt chart of the `TraceID`. We would see exactly how many milliseconds the PDF-to-Image conversion took, the latency of the Extractor LLM call, the Validator execution time, and the Router LLM call. 
+- **Visibility:** If a document is flagged, we can click the trace and see the exact prompt sent to the LLM and the raw token output, allowing us to debug if the prompt or the model degraded.
 
-## 3. Observability — Tracing a Shipment in Production
+---
 
-If this ran for 50 customers, here's what I'd instrument:
+## 4. Cost Analysis
 
-**Per-shipment trace:**
-- Unique `shipment_id` assigned at upload time
-- Each agent logs: `{shipment_id, agent_name, start_time, end_time, input_hash, output_hash, status}`
-- Stored in a structured log (Langfuse or OpenTelemetry traces)
-- Any LLM call logs: model, prompt tokens, completion tokens, latency, cost
+Using Groq's high-speed inference on Llama models provides incredibly low operational costs compared to traditional SaaS models.
 
-**Dashboard (what I'd show):**
+* **Extractor (Llama 4 Scout Vision):** ~1,500 tokens for a standard 1-page PDF image + 500 prompt tokens. At ~$0.10 per 1M input tokens, this costs **$0.0002**.
+* **Router (Llama 3.3 70B):** ~1,000 prompt tokens + 200 output tokens. At ~$0.50 per 1M tokens, this costs **$0.0006**.
+* **Total Cost per Document:** **<$0.001** (Less than a tenth of a cent).
 
-| Panel | Metric | Why |
-|-------|--------|-----|
-| Throughput | Docs processed / hour | Capacity planning |
-| Pipeline health | Success rate (%) | Are we breaking? |
-| Latency | P50/P95 per agent | Where's the bottleneck? |
-| Decision distribution | % approve / review / amend | Is the model drifting? |
-| Cost | $/document, $/day | Budget tracking |
-| Confidence distribution | Histogram of extraction confidence | Model quality over time |
-| Override rate | % of agent decisions overridden by CG | Trust calibration |
+**Where it blows up:** 
+If a supplier attaches a 100-page combined PDF where only page 4 is the Bill of Lading, converting 100 pages to base64 images and sending them to the vision model will blow up both cost and latency, and likely hit payload limits (e.g., Groq's 4MB base64 limit).
+**How to control it:**
+Implement a pre-processing step using a lightweight tool (like PyMuPDF text scraping or a tiny classifier) to identify which specific pages contain the required trade documents *before* sending them to the expensive vision model.
 
-**Alert triggers:**
-- Pipeline error rate > 5% in 1 hour
-- Average extraction confidence drops below 0.7
-- Cost per document exceeds $0.01
-- CG override rate exceeds 30% (agent is unreliable)
+---
 
-## 4. Cost — Back-of-Envelope
+## 5. Latency 
 
-| Component | Input | Cost |
-|-----------|-------|------|
-| Extractor (Gemini Flash Vision) | ~1500 tokens (1-2 page PDF) | ~$0.00015 |
-| Validator | No LLM call — pure Python | $0.00 |
-| Router (Gemini Flash Text) | ~2000 tokens (validation JSON) | ~$0.00020 |
-| Query (Gemini Flash Text) | ~500 tokens per question | ~$0.00005 |
-| **Total per document** | | **~$0.0004** |
+* **The Slowest Hop:** The Extractor Agent. Sending a massive Base64 image payload over the wire and running vision inference takes 3-5 seconds. By comparison, the deterministic Validator takes <0.01 seconds, and the Text Router takes ~0.8 seconds.
+* **How to fix it:**
+  1. **Image Optimization:** Instead of high-res JPEGs, compress the PDF page to a lower DPI grayscale image. Trade docs are black-and-white text; they don't need color channels or high resolution.
+  2. **Streaming:** Use streaming for the LLM responses so the UI can start rendering the JSON extraction field-by-field as it generates, reducing perceived latency to the user.
 
-**At scale:**
-- 1,000 docs/day = ~$0.40/day = ~$12/month
-- 10,000 docs/day = ~$4.00/day = ~$120/month
+---
 
-**Where it blows up:**
-- Multi-page documents (10+ pages) → extraction tokens scale linearly → use page selection/chunking
-- Retry storms → if error rate spikes and every doc retries 3x → 3x cost → circuit breaker needed
-- Query abuse → if users run 100 NL queries/day → queries are cheap but add up → cache frequent queries
+## 6. What I Would Do With a Week
 
-## 5. Latency — Where's the Slowest Hop?
+If I had a week instead of a few days, I would build:
 
-| Stage | Typical Latency | Bottleneck? |
-|-------|----------------|-------------|
-| File upload + save | ~50ms | No |
-| **Extractor (Gemini Vision)** | **3–5 seconds** | **Yes — dominant** |
-| Validator (Python rules) | ~5ms | No |
-| Router (Gemini Text) | 1–2 seconds | Minor |
-| Store (SQLite insert) | ~5ms | No |
-| **Total pipeline** | **4–7 seconds** | |
-
-**How to fix it:**
-1. **Extractor is the bottleneck.** For production: pre-process PDFs to images on upload (async), cache extraction results by content hash, parallelize multi-page extraction.
-2. **Batch processing:** When multiple docs arrive in one email, extract all in parallel rather than sequential.
-3. **Model downgrade for simple docs:** If the doc is clearly formatted (e.g., digital PDF, not a scan), use a cheaper/faster model or even regex extraction as a first pass.
-
-## 6. What I'd Do Differently with a Week
-
-1. **Cross-document validation** — When a shipment has BOL + Invoice + Packing List, validate that consignee, HS code, and weight match across all three. Currently each doc is validated independently.
-
-2. **Proper eval suite** — Build a test set of 20+ annotated trade docs with ground-truth field values. Run automated accuracy tests on every code change. Track extraction accuracy, validation precision/recall, and routing correctness over time.
-
-3. **PDF preprocessing pipeline** — OCR fallback for scanned docs (via Tesseract), page detection to handle multi-page documents, image enhancement for low-quality scans before sending to the vision model.
-
-4. **Structured output enforcement** — Use Gemini's JSON mode / response schema to guarantee valid JSON instead of prompt-based JSON extraction + post-processing cleanup.
-
-5. **Proper observability** — Integrate Langfuse for LLM tracing, add OpenTelemetry spans for each pipeline stage, build a real monitoring dashboard.
-
-6. **Customer rule management UI** — A simple CRUD interface for CG leads to create and edit customer rule sets without touching JSON files.
+1. **Cross-Document Validation:** Currently, the system validates a single document against customer rules. Real trade shipments involve comparing the Bill of Lading *against* the Commercial Invoice (e.g., verifying the Total Weight matches across both). I would build a 4th agent for "Reconciliation".
+2. **Human-in-the-Loop Feedback Engine:** When a human reviews a flagged document and corrects a field, that correction should be saved as a few-shot example. The next time the prompt is sent, it dynamically pulls that correction from a vector database (like Weaviate) to ensure the model doesn't make the same mistake twice.
+3. **LangGraph Orchestration:** Currently, the pipeline is a hardcoded linear script (`E -> V -> R`). With a week, I would migrate this to **LangGraph**, allowing for complex routing topologies, such as looping back to the Extractor with an "Enhanced Prompt" if the initial confidence score is too low.
