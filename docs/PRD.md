@@ -104,18 +104,18 @@ Each agent's output is persisted to **SQLite** before the next agent runs. If th
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| **Extraction model** | Gemini 2.0 Flash (vision) | Free tier available, strong vision capabilities, fast inference. Trade docs are structured enough that Flash handles them well. Fallback: if confidence is low, re-prompt with enhanced extraction instructions. |
-| **Validation model** | Gemini 2.0 Flash | Rule comparison is simple enough for Flash. Structured JSON output mode enforces schema compliance. |
-| **Routing model** | Gemini 2.0 Flash | Decision logic is straightforward. Flash is cost-effective for this. |
-| **Why not GPT-4o?** | Cost | GPT-4o is ~3–5× more expensive with similar quality for structured doc extraction. Gemini Flash offers better cost-performance for this use case. |
+| **Extraction model** | Groq `llama-4-scout` (Vision) | Free tier available, strong vision capabilities, lightning-fast inference. Trade docs are structured enough that Llama 4 Scout handles them perfectly. |
+| **Validation logic** | Deterministic Python | Rule comparison must be exact. LLMs are bad at exact string matching, so we use pure Python code to validate fields against rules. 0 latency, 0 cost, 100% reliable. |
+| **Routing model** | Groq `llama-3.3-70b` | Decision logic and email drafting require high reasoning. Llama 3.3 70B is incredibly smart and Groq makes it practically instant. |
+| **Why not GPT-4o?** | Cost & Latency | GPT-4o is significantly more expensive and slower. Groq's LPU inference engine gives us sub-second text generation, which is critical for operator UX. |
 | **Orchestration** | Custom Python (not LangGraph) | Pipeline is linear (E→V→R). LangGraph adds value for complex topologies — branches, loops, parallel execution. Here it adds a dependency without functional benefit. If Part 2 requires branching, we add it then. |
-| **Structured output** | JSON schema enforcement | Used for extraction and validation outputs. *Not* used for the draft amendment email in routing — that needs free-form natural language. |
+| **Structured output** | JSON schema enforcement | Used for extraction outputs to guarantee schema. *Not* used for the draft amendment email in routing — that needs free-form natural language. |
 
 ### Cost & Latency Estimates
 
 | Metric | Estimate |
 |---|---|
-| Flash pricing | ~$0.10 / 1M input tokens |
+| Groq Llama pricing | Free (Preview tier) / Highly cost-effective at scale |
 | Tokens per trade doc | ~1,500 (2–3 page PDF as image) |
 | **Cost per document (full pipeline)** | **~$0.001–0.003** |
 | Extraction latency | ~3–5s (vision is the bottleneck) |
